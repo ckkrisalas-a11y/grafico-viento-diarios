@@ -159,76 +159,104 @@ def cargar_y_preparar():
     if not CSV_MENSUAL.exists():
         raise FileNotFoundError(f"No existe el archivo esperado: {CSV_MENSUAL}")
 
-    # Lectura normal
-    df = pd.read_csv(CSV_MENSUAL)
-
-    # Fallback por si alguna vez el CSV quedó sin encabezado correcto
-    cols_lower = [str(c).strip().lower() for c in df.columns]
     expected = ["fecha", "hora", "direccion", "intensidad"]
 
-    if cols_lower != expected:
+    # Leer como texto para no perder formato
+    df = pd.read_csv(CSV_MENSUAL, dtype=str)
+
+    # Normalizar nombres de columnas
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    # Si por alguna razón no vienen bien los headers, forzarlos
+    if list(df.columns) != expected:
         if len(df.columns) == 4:
-            df = pd.read_csv(
-                CSV_MENSUAL,
-                header=None,
-                names=expected,
-                skiprows=1
-            )
+            df = pd.read_csv(CSV_MENSUAL, dtype=str, header=None, names=expected)
         else:
             raise ValueError(
                 f"El CSV no tiene las columnas esperadas {expected}. "
                 f"Columnas encontradas: {list(df.columns)}"
             )
 
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    # Limpiar espacios
+    for c in expected:
+        df[c] = df[c].astype(str).str.strip()
 
-    required = ["fecha", "hora", "direccion", "intensidad"]
-    faltantes = [c for c in required if c not in df.columns]
-    if faltantes:
-        raise ValueError(
-            f"El CSV no tiene las columnas esperadas {required}. "
-            f"Faltan: {faltantes}. "
-            f"Columnas encontradas: {list(df.columns)}"
-        )
+    # Eliminar filas vacías
+    df = df.replace({"": np.nan})
+    df = df.dropna(subset=["fecha", "hora", "direccion", "intensidad"], how="all").copy()
 
-    fecha = pd.to_datetime(df["fecha"], errors="coerce", dayfirst=True)
+    # Eliminar fila encabezado repetida dentro del cuerpo
+    mask_header = (
+        df["fecha"].str.lower().eq("fecha") &
+        df["hora"].str.lower().eq("hora") &
+        df["direccion"].str.lower().eq("direccion") &
+        df["intensidad"].str.lower().eq("intensidad")
+    )
+    df = df.loc[~mask_header].copy()
 
-    hora_txt = df["hora"].astype(str).str.strip()
-    hora_dt = pd.to_timedelta(hora_txt, errors="coerce")
+    print("Primeras filas crudas:")
+    print(df[["fecha", "hora", "direccion", "intensidad"]].head(5).to_string(index=False))
 
-    # Fallback por si la hora viene como decimal
-    mask_bad = hora_dt.isna()
-    if mask_bad.any():
-        hora_num = pd.to_numeric(
-            hora_txt[mask_bad].str.replace(",", ".", regex=False),
-            errors="coerce"
-        )
-        hora_alt = pd.to_timedelta(hora_num, unit="h")
-        hora_dt.loc[mask_bad] = hora_alt
+    # Parseo robusto de datetime
+    fh = df["fecha"].astype(str) + " " + df["hora"].astype(str)
+    dt = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
 
-    df["datetime"] = fecha + hora_dt
+    formatos = [
+        "%d-%m-%Y %H:%M",
+        "%d-%m-%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+    ]
 
+    for fmt in formatos:
+        m = dt.isna()
+        if m.any():
+            dt.loc[m] = pd.to_datetime(fh.loc[m], format=fmt, errors="coerce")
+
+    # Fallback final
+    m = dt.isna()
+    if m.any():
+        dt.loc[m] = pd.to_datetime(fh.loc[m], errors="coerce", dayfirst=True)
+
+    df["datetime"] = dt
+
+    # Convertir variables numéricas
     df["wind_kt"] = pd.to_numeric(
-        df["intensidad"].astype(str).str.replace(",", ".", regex=False),
+        df["intensidad"].str.replace(",", ".", regex=False),
         errors="coerce"
     )
     df["wind_dir"] = pd.to_numeric(
-        df["direccion"].astype(str).str.replace(",", ".", regex=False),
+        df["direccion"].str.replace(",", ".", regex=False),
         errors="coerce"
     )
 
-    df = df.dropna(subset=["datetime", "wind_kt"])
+    # Limpiar filas inválidas
+    df = df.dropna(subset=["datetime", "wind_kt"]).copy()
+
+    print("Rango datetime parseado:", df["datetime"].min(), "->", df["datetime"].max())
+    print("Filas válidas tras parseo:", len(df))
+
     df = df.sort_values("datetime").set_index("datetime")
 
-    # Mantener el mismo filtro que tu script original
+    # Mantener filtro de intensidades altas del código original
     df["wind_kt"] = df["wind_kt"].where(df["wind_kt"] <= 30.0, other=np.nan)
     df = df.dropna(subset=["wind_kt"])
 
-    # Filtrar por seguridad solo al mes objetivo
+    print("Rango índice antes del filtro final:", df.index.min(), "->", df.index.max())
+    print("Filas tras filtro wind_kt<=30:", len(df))
+
+    # Filtrar mes objetivo
     df = df[(df.index.year == TARGET_YEAR) & (df.index.month == TARGET_MONTH)].copy()
 
+    print(f"Filas finales en {TARGET_MONTH:02d}-{TARGET_YEAR}:", len(df))
+
     if df.empty:
-        raise RuntimeError("El DataFrame quedó vacío después de filtrar marzo 2026.")
+        raise RuntimeError(
+            "El DataFrame quedó vacío después de filtrar marzo 2026. "
+            "Revisa en el log las 'Primeras filas crudas' y el 'Rango datetime parseado'."
+        )
 
     return df
 
