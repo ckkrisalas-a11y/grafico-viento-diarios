@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -31,12 +31,26 @@ jobs:
           python-version: "3.11"
 
       - name: Instalar dependencias
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verificar navegador disponible
+        run: |
+          google-chrome --version
+          chromedriver --version || true
 
       - name: Ejecutar script
         env:
           MI_PASSWORD: ${{ secrets.MI_PASSWORD }}
-        run: python scripts/generar.py
+        run: |
+          python scripts/generar.py
+
+      - name: Verificar salida generada
+        run: |
+          ls -R
+          test -d site
+          test -f site/index.html
 
       - name: Subir artefacto Pages
         uses: actions/upload-pages-artifact@v4
@@ -45,7 +59,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
