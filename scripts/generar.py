@@ -237,7 +237,7 @@ def cargar_y_preparar(year: int, month: int) -> pd.DataFrame:
     )
     df = df.loc[~mask_header].copy()
 
-    # datetime robusto
+    # Parseo robusto de fecha+hora como UTC
     fh = df["fecha"].astype(str) + " " + df["hora"].astype(str)
     dt = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
 
@@ -259,6 +259,11 @@ def cargar_y_preparar(year: int, month: int) -> pd.DataFrame:
     if m.any():
         dt.loc[m] = pd.to_datetime(fh.loc[m], errors="coerce", dayfirst=True)
 
+    # IMPORTANTE:
+    # Interpretamos la hora descargada como UTC y luego la convertimos a Chile
+    dt = pd.DatetimeIndex(dt)
+    dt = dt.tz_localize("UTC").tz_convert("America/Santiago")
+
     df["datetime"] = dt
 
     df["wind_kt"] = pd.to_numeric(
@@ -273,10 +278,10 @@ def cargar_y_preparar(year: int, month: int) -> pd.DataFrame:
     df = df.dropna(subset=["datetime", "wind_kt"]).copy()
     df = df.sort_values("datetime").set_index("datetime")
 
-    # Mantener el filtro de tu versión anterior
     df["wind_kt"] = df["wind_kt"].where(df["wind_kt"] <= 30.0, other=np.nan)
     df = df.dropna(subset=["wind_kt"])
 
+    # Filtrar por mes local de Chile
     df = df[(df.index.year == year) & (df.index.month == month)].copy()
 
     if df.empty:
