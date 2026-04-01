@@ -115,21 +115,29 @@ def descargar_mes():
 
         tabla = driver.find_element(By.XPATH, '//*[@id="excel"]/div/table')
         filas = tabla.find_elements(By.XPATH, "./tbody/tr")
-        encabezados = [th.text.strip() for th in tabla.find_elements(By.XPATH, "./thead/tr/th")][:4]
+        # Forzar encabezados fijos
+        encabezados = ["fecha", "hora", "direccion", "intensidad"]
 
         datos = []
-        for fila in filas[1:]:
-            celdas = fila.find_elements(By.TAG_NAME, "td")
-            if len(celdas) >= 4:
-                datos.append([cel.text.strip() for cel in celdas[:4]])
+        for fila in filas:
+        celdas = fila.find_elements(By.TAG_NAME, "td")
+        if len(celdas) >= 4:
+            fila_txt = [cel.text.strip() for cel in celdas[:4]]
 
-        if not datos:
-            raise RuntimeError("No se descargaron datos para el mes solicitado.")
+            # Evitar una fila de encabezado incrustada dentro del tbody
+            fila_norm = [x.strip().lower() for x in fila_txt]
+        if fila_norm == ["fecha", "hora", "direccion", "intensidad"]:
+            continue
 
-        with open(CSV_MENSUAL, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(encabezados)
-            writer.writerows(datos)
+        datos.append(fila_txt)
+
+if not datos:
+    raise RuntimeError("No se descargaron datos para el mes solicitado.")
+
+with open(CSV_MENSUAL, "w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f)
+    writer.writerow(encabezados)
+    writer.writerows(datos)
 
         print(f"CSV mensual guardado en: {CSV_MENSUAL}")
         print(f"Filas descargadas: {len(datos)}")
