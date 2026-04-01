@@ -2,7 +2,8 @@ name: generar-y-publicar
 
 on:
   schedule:
-    - cron: "15 12 * * *"
+    - cron: "17 * * * *"
+      timezone: "America/Santiago"
   workflow_dispatch:
 
 permissions:
