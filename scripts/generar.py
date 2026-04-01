@@ -2,8 +2,10 @@
 import os
 import csv
 import time
+import calendar
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -30,8 +32,6 @@ if not PASSWORD:
 
 ESTACION_ID = 360019
 ELEMENTO_ID = 28
-TARGET_YEAR = 2026
-TARGET_MONTH = 3   # marzo 2026
 
 THR20 = 20.0
 THR15 = 15.0
@@ -44,20 +44,59 @@ STAR15_FACE = "silver"
 STAR15_EDGE = "dimgray"
 STAR15_SIZE = 80
 
+TZ_LOCAL = ZoneInfo("America/Santiago")
+
 DATA_DIR = Path("data")
 SITE_DIR = Path("site")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SITE_DIR.mkdir(parents=True, exist_ok=True)
 
-CSV_MENSUAL = DATA_DIR / f"viento_{TARGET_YEAR}_{TARGET_MONTH:02d}.csv"
-PNG_OUT = SITE_DIR / f"serie_viento_direccion_{TARGET_YEAR}_{TARGET_MONTH:02d}.png"
-HTML_OUT = SITE_DIR / "index.html"
+
+# ============================================================
+# UTILIDADES GENERALES
+# ============================================================
+def nombre_mes_es(month: int) -> str:
+    meses = [
+        "", "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+    ]
+    return meses[month]
+
+
+def meses_objetivo():
+    """
+    Devuelve [(anio_mes_anterior), (anio_mes_actual)] usando hora de Chile.
+    """
+    now_local = datetime.now(TZ_LOCAL)
+    primero_actual = datetime(now_local.year, now_local.month, 1, tzinfo=TZ_LOCAL)
+    ultimo_anterior = primero_actual - timedelta(days=1)
+
+    return [
+        (ultimo_anterior.year, ultimo_anterior.month),
+        (now_local.year, now_local.month),
+    ]
+
+
+def csv_path(year: int, month: int) -> Path:
+    return DATA_DIR / f"viento_{year}_{month:02d}.csv"
+
+
+def png_path(year: int, month: int) -> Path:
+    return SITE_DIR / f"serie_viento_direccion_{year}_{month:02d}.png"
+
+
+def es_mes_parcial(df_plot: pd.DataFrame, year: int, month: int) -> bool:
+    if df_plot.empty:
+        return False
+    ultimo_dia_con_datos = int(df_plot.index.max().day)
+    ultimo_dia_mes = calendar.monthrange(year, month)[1]
+    return ultimo_dia_con_datos < ultimo_dia_mes
 
 
 # ============================================================
-# 1) DESCARGAR SOLO EL MES OBJETIVO
+# SELENIUM
 # ============================================================
-def descargar_mes():
+def crear_driver():
     options = webdriver.ChromeOptions()
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
@@ -78,114 +117,118 @@ def descargar_mes():
     driver.execute_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
+    return driver
 
+
+def login_meteochile(driver):
+    print("Abriendo login MeteoChile...")
+    driver.get("https://climatologia.meteochile.gob.cl/application/usuario/loginUsuario")
+
+    email_box = WebDriverWait(driver, 20).until(
+        EC.presence_of_element_located((By.ID, "correo"))
+    )
+    password_box = driver.find_element(By.ID, "clave")
+    acceder_btn = driver.find_element(By.XPATH, "//button[contains(., 'Acceder')]")
+
+    actions = ActionChains(driver)
+
+    actions.move_to_element(email_box).click().perform()
+    for char in USER:
+        email_box.send_keys(char)
+        time.sleep(0.03)
+
+    actions.move_to_element(password_box).click().perform()
+    for char in PASSWORD:
+        password_box.send_keys(char)
+        time.sleep(0.03)
+
+    actions.move_to_element(acceder_btn).pause(0.4).click().perform()
+    print("Login enviado.")
+    time.sleep(3)
+
+
+def descargar_mes(driver, year: int, month: int):
+    salida = csv_path(year, month)
+
+    datos_url = (
+        "https://climatologia.meteochile.gob.cl/application/informacion/"
+        f"datosMensualesDelElemento/{ESTACION_ID}/{year}/{month}/{ELEMENTO_ID}"
+    )
+    print(f"Descargando {year}-{month:02d} ...")
+    driver.get(datos_url)
+    time.sleep(3)
+
+    tabla = driver.find_element(By.XPATH, '//*[@id="excel"]/div/table')
+    filas = tabla.find_elements(By.XPATH, ".//tbody/tr")
+
+    encabezados = ["fecha", "hora", "direccion", "intensidad"]
+    datos = []
+
+    for fila in filas:
+        celdas = fila.find_elements(By.TAG_NAME, "td")
+        if len(celdas) >= 4:
+            fila_txt = [cel.text.strip() for cel in celdas[:4]]
+
+            if not any(fila_txt):
+                continue
+
+            fila_norm = [x.strip().lower() for x in fila_txt]
+            if fila_norm == encabezados:
+                continue
+
+            datos.append(fila_txt)
+
+    if not datos:
+        raise RuntimeError(f"No se descargaron datos para {year}-{month:02d}")
+
+    with open(salida, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(encabezados)
+        writer.writerows(datos)
+
+    print(f"CSV guardado en: {salida}")
+    print(f"Filas descargadas en {year}-{month:02d}: {len(datos)}")
+
+
+def descargar_meses(meses):
+    driver = crear_driver()
     try:
-        print("Abriendo login MeteoChile...")
-        driver.get("https://climatologia.meteochile.gob.cl/application/usuario/loginUsuario")
-
-        email_box = WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.ID, "correo"))
-        )
-        password_box = driver.find_element(By.ID, "clave")
-        acceder_btn = driver.find_element(By.XPATH, "//button[contains(., 'Acceder')]")
-
-        actions = ActionChains(driver)
-
-        actions.move_to_element(email_box).click().perform()
-        for char in USER:
-            email_box.send_keys(char)
-            time.sleep(0.05)
-
-        actions.move_to_element(password_box).click().perform()
-        for char in PASSWORD:
-            password_box.send_keys(char)
-            time.sleep(0.05)
-
-        actions.move_to_element(acceder_btn).pause(0.5).click().perform()
-        print("Login enviado.")
-        time.sleep(3)
-
-        datos_url = (
-            "https://climatologia.meteochile.gob.cl/application/informacion/"
-            f"datosMensualesDelElemento/{ESTACION_ID}/{TARGET_YEAR}/{TARGET_MONTH}/{ELEMENTO_ID}"
-        )
-        print(f"Descargando mes {TARGET_MONTH:02d}-{TARGET_YEAR}...")
-        driver.get(datos_url)
-        time.sleep(3)
-
-        tabla = driver.find_element(By.XPATH, '//*[@id="excel"]/div/table')
-        filas = tabla.find_elements(By.XPATH, ".//tbody/tr")
-
-        # Forzar encabezados fijos
-        encabezados = ["fecha", "hora", "direccion", "intensidad"]
-
-        datos = []
-        for fila in filas:
-            celdas = fila.find_elements(By.TAG_NAME, "td")
-            if len(celdas) >= 4:
-                fila_txt = [cel.text.strip() for cel in celdas[:4]]
-
-                # Saltar filas vacías
-                if not any(fila_txt):
-                    continue
-
-                # Evitar encabezado duplicado dentro del tbody
-                fila_norm = [x.strip().lower() for x in fila_txt]
-                if fila_norm == ["fecha", "hora", "direccion", "intensidad"]:
-                    continue
-
-                datos.append(fila_txt)
-
-        if not datos:
-            raise RuntimeError("No se descargaron datos para el mes solicitado.")
-
-        with open(CSV_MENSUAL, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(encabezados)
-            writer.writerows(datos)
-
-        print(f"CSV mensual guardado en: {CSV_MENSUAL}")
-        print(f"Filas descargadas: {len(datos)}")
-
+        login_meteochile(driver)
+        for year, month in meses:
+            descargar_mes(driver, year, month)
     finally:
         driver.quit()
         print("Navegador cerrado.")
 
 
 # ============================================================
-# 2) LEER CSV MENSUAL Y NORMALIZAR
+# LECTURA / PREPARACIÓN
 # ============================================================
-def cargar_y_preparar():
-    if not CSV_MENSUAL.exists():
-        raise FileNotFoundError(f"No existe el archivo esperado: {CSV_MENSUAL}")
+def cargar_y_preparar(year: int, month: int) -> pd.DataFrame:
+    archivo = csv_path(year, month)
+    if not archivo.exists():
+        raise FileNotFoundError(f"No existe el archivo esperado: {archivo}")
 
     expected = ["fecha", "hora", "direccion", "intensidad"]
 
-    # Leer como texto para no perder formato
-    df = pd.read_csv(CSV_MENSUAL, dtype=str)
-
-    # Normalizar nombres de columnas
+    df = pd.read_csv(archivo, dtype=str)
     df.columns = [str(c).strip().lower() for c in df.columns]
 
-    # Si por alguna razón no vienen bien los headers, forzarlos
     if list(df.columns) != expected:
         if len(df.columns) == 4:
-            df = pd.read_csv(CSV_MENSUAL, dtype=str, header=None, names=expected)
+            df = pd.read_csv(archivo, dtype=str, header=None, names=expected)
         else:
             raise ValueError(
                 f"El CSV no tiene las columnas esperadas {expected}. "
                 f"Columnas encontradas: {list(df.columns)}"
             )
 
-    # Limpiar espacios
     for c in expected:
         df[c] = df[c].astype(str).str.strip()
 
-    # Eliminar filas vacías
     df = df.replace({"": np.nan})
-    df = df.dropna(subset=["fecha", "hora", "direccion", "intensidad"], how="all").copy()
+    df = df.dropna(subset=expected, how="all").copy()
 
-    # Eliminar fila encabezado repetida dentro del cuerpo
     mask_header = (
         df["fecha"].str.lower().eq("fecha") &
         df["hora"].str.lower().eq("hora") &
@@ -194,10 +237,7 @@ def cargar_y_preparar():
     )
     df = df.loc[~mask_header].copy()
 
-    print("Primeras filas crudas:")
-    print(df[["fecha", "hora", "direccion", "intensidad"]].head(5).to_string(index=False))
-
-    # Parseo robusto de datetime
+    # datetime robusto
     fh = df["fecha"].astype(str) + " " + df["hora"].astype(str)
     dt = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
 
@@ -215,14 +255,12 @@ def cargar_y_preparar():
         if m.any():
             dt.loc[m] = pd.to_datetime(fh.loc[m], format=fmt, errors="coerce")
 
-    # Fallback final
     m = dt.isna()
     if m.any():
         dt.loc[m] = pd.to_datetime(fh.loc[m], errors="coerce", dayfirst=True)
 
     df["datetime"] = dt
 
-    # Convertir variables numéricas
     df["wind_kt"] = pd.to_numeric(
         df["intensidad"].str.replace(",", ".", regex=False),
         errors="coerce"
@@ -232,39 +270,25 @@ def cargar_y_preparar():
         errors="coerce"
     )
 
-    # Limpiar filas inválidas
     df = df.dropna(subset=["datetime", "wind_kt"]).copy()
-
-    print("Rango datetime parseado:", df["datetime"].min(), "->", df["datetime"].max())
-    print("Filas válidas tras parseo:", len(df))
-
     df = df.sort_values("datetime").set_index("datetime")
 
-    # Mantener filtro de intensidades altas del código original
+    # Mantener el filtro de tu versión anterior
     df["wind_kt"] = df["wind_kt"].where(df["wind_kt"] <= 30.0, other=np.nan)
     df = df.dropna(subset=["wind_kt"])
 
-    print("Rango índice antes del filtro final:", df.index.min(), "->", df.index.max())
-    print("Filas tras filtro wind_kt<=30:", len(df))
-
-    # Filtrar mes objetivo
-    df = df[(df.index.year == TARGET_YEAR) & (df.index.month == TARGET_MONTH)].copy()
-
-    print(f"Filas finales en {TARGET_MONTH:02d}-{TARGET_YEAR}:", len(df))
+    df = df[(df.index.year == year) & (df.index.month == month)].copy()
 
     if df.empty:
-        raise RuntimeError(
-            "El DataFrame quedó vacío después de filtrar marzo 2026. "
-            "Revisa en el log las 'Primeras filas crudas' y el 'Rango datetime parseado'."
-        )
+        raise RuntimeError(f"El DataFrame quedó vacío en {year}-{month:02d}")
 
     return df
 
 
 # ============================================================
-# 3) GRAFICAR SUBPLOT
+# FIGURA
 # ============================================================
-def to_month_ref(idx, month=TARGET_MONTH, year_ref=2000):
+def to_month_ref(idx, month: int, year_ref: int = 2000):
     idx = pd.DatetimeIndex(idx)
     return pd.to_datetime({
         "year": np.full(len(idx), year_ref, dtype=int),
@@ -276,28 +300,34 @@ def to_month_ref(idx, month=TARGET_MONTH, year_ref=2000):
     })
 
 
-def generar_figura(df_plot):
-    t_ref = to_month_ref(df_plot.index)
-    xmin = pd.Timestamp(2000, TARGET_MONTH, 1)
+def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
+    t_ref = to_month_ref(df_plot.index, month=month)
+    xmin = pd.Timestamp(2000, month, 1)
     xmax = xmin + pd.offsets.MonthBegin(1)
 
     dir_plot = df_plot["wind_dir"].copy()
     dir_plot[df_plot["wind_kt"] == 0] = np.nan
 
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1,
-        figsize=(20, 8),
-        sharex=True,
-        gridspec_kw={"height_ratios": [1, 1], "hspace": 0.06}
+    # GridSpec para que ambos paneles tengan exactamente el mismo ancho
+    fig = plt.figure(figsize=(20, 8))
+    gs = fig.add_gridspec(
+        2, 2,
+        height_ratios=[1, 1],
+        width_ratios=[50, 1.2],
+        hspace=0.06,
+        wspace=0.03
     )
 
-    # Panel superior: intensidad
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[1, 0], sharex=ax1)
+    cax = fig.add_subplot(gs[1, 1])
+
+    # ── Panel superior: Intensidad ───────────────────────────
     ax1.plot(
-        t_ref,
-        df_plot["wind_kt"],
+        t_ref, df_plot["wind_kt"],
         color="tab:red",
         linewidth=1.5,
-        label=str(TARGET_YEAR),
+        label=str(year),
         zorder=3
     )
 
@@ -313,7 +343,7 @@ def generar_figura(df_plot):
         ts_max = gd["wind_kt"].idxmax()
         val_max = gd.loc[ts_max, "wind_kt"]
         ax1.scatter(
-            to_month_ref([ts_max]),
+            to_month_ref([ts_max], month=month),
             [val_max],
             marker="*",
             s=STAR20_SIZE,
@@ -330,7 +360,7 @@ def generar_figura(df_plot):
         ts_max = gd["wind_kt"].idxmax()
         val_max = gd.loc[ts_max, "wind_kt"]
         ax1.scatter(
-            to_month_ref([ts_max]),
+            to_month_ref([ts_max], month=month),
             [val_max],
             marker="*",
             s=STAR15_SIZE,
@@ -345,7 +375,7 @@ def generar_figura(df_plot):
 
     ax1.text(
         0.01, 0.97,
-        f"$\\bf{{{TARGET_YEAR}}}$\n★ ≥20 kt: {n20} días\n☆ ≥15 kt: {n15} días",
+        f"$\\bf{{{year}}}$\n★ ≥20 kt: {n20} días\n☆ ≥15 kt: {n15} días",
         transform=ax1.transAxes,
         fontsize=9,
         verticalalignment="top",
@@ -358,40 +388,36 @@ def generar_figura(df_plot):
         )
     )
 
-    h_line = plt.Line2D([0], [0], color="tab:red", linewidth=1.5, label=str(TARGET_YEAR))
+    h_line = plt.Line2D([0], [0], color="tab:red", linewidth=1.5, label=str(year))
     h_thr15 = plt.Line2D([0], [0], color="silver", linestyle="--", linewidth=1.2, label="15 kt")
     h_thr20 = plt.Line2D([0], [0], color="gold", linestyle="--", linewidth=1.2, label="20 kt")
-    h15 = ax1.scatter(
-        [], [], marker="*", s=STAR15_SIZE,
-        facecolor=STAR15_FACE, edgecolor=STAR15_EDGE,
-        linewidth=1.0, label="≥15 kt"
-    )
-    h20 = ax1.scatter(
-        [], [], marker="*", s=STAR20_SIZE,
-        facecolor=STAR20_FACE, edgecolor=STAR20_EDGE,
-        linewidth=1.0, label="≥20 kt"
-    )
+    h15 = ax1.scatter([], [], marker="*", s=STAR15_SIZE,
+                      facecolor=STAR15_FACE, edgecolor=STAR15_EDGE,
+                      linewidth=1.0, label="≥15 kt")
+    h20 = ax1.scatter([], [], marker="*", s=STAR20_SIZE,
+                      facecolor=STAR20_FACE, edgecolor=STAR20_EDGE,
+                      linewidth=1.0, label="≥20 kt")
 
     ax1.legend(handles=[h_line, h_thr15, h_thr20, h15, h20],
                frameon=False, loc="upper right")
 
+    parcial_txt = " (parcial)" if es_mes_parcial(df_plot, year, month) else ""
+    ax1.set_title(
+        f"Viento en Carriel Sur — {nombre_mes_es(month).capitalize()} {year}{parcial_txt}",
+        fontsize=12
+    )
     ax1.set_ylabel("Intensidad [kt]")
-    ax1.set_title(f"Viento en Carriel Sur — {TARGET_YEAR} (mes {TARGET_MONTH:02d})", fontsize=12)
+    ax1.set_xlim(xmin, xmax)
     ax1.grid(True, which="major", alpha=0.3)
     ax1.grid(True, which="minor", alpha=0.1, linestyle=":")
-    ax1.set_xlim(xmin, xmax)
-    ax1.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 6, 12, 18]))
+    ax1.tick_params(axis="x", labelbottom=False)
 
-    # Panel inferior: dirección
+    # ── Panel inferior: Dirección ───────────────────────────
     sc = ax2.scatter(
-        t_ref,
-        dir_plot,
-        c=dir_plot,
-        cmap="hsv",
-        vmin=0,
-        vmax=360,
-        s=18,
-        zorder=3
+        t_ref, dir_plot,
+        c=dir_plot, cmap="hsv",
+        vmin=0, vmax=360,
+        s=22, zorder=3
     )
 
     for deg in [0, 90, 180, 270, 360]:
@@ -401,85 +427,150 @@ def generar_figura(df_plot):
     ax2.set_yticklabels(["N (0°)", "E (90°)", "S (180°)", "O (270°)", "N (360°)"])
     ax2.set_ylabel("Dirección")
     ax2.set_ylim(-10, 370)
-    ax2.grid(True, alpha=0.2)
+    ax2.grid(True, which="major", alpha=0.2)
+    ax2.grid(True, which="minor", alpha=0.1, linestyle=":")
 
-    cbar = plt.colorbar(sc, ax=ax2, orientation="vertical", pad=0.01, fraction=0.02)
+    cbar = fig.colorbar(sc, cax=cax)
     cbar.set_label("Dir. [°]")
     cbar.set_ticks([0, 90, 180, 270, 360])
     cbar.set_ticklabels(["N", "E", "S", "O", "N"])
+
+    # Mismo eje x en ambos paneles
+    ax1.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+    ax1.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 6, 12, 18]))
 
     ax2.xaxis.set_major_locator(mdates.DayLocator(interval=1))
     ax2.xaxis.set_major_formatter(mdates.DateFormatter("%d"))
     ax2.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 6, 12, 18]))
     ax2.set_xlim(xmin, xmax)
-    ax2.set_xlabel(f"Día de mes {TARGET_MONTH:02d}")
+    ax2.set_xlabel(f"Día de {nombre_mes_es(month)}")
 
-    plt.tight_layout()
-    plt.savefig(PNG_OUT, dpi=150, bbox_inches="tight")
-    plt.close()
+    out_png = png_path(year, month)
+    plt.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
-    print(f"Figura guardada en: {PNG_OUT}")
-    return n15, n20
+    print(f"Figura guardada en: {out_png}")
+
+    fecha_ultima = df_plot.index.max().strftime("%d-%m-%Y %H:%M")
+    return {
+        "year": year,
+        "month": month,
+        "month_name": nombre_mes_es(month),
+        "png_name": out_png.name,
+        "n15": n15,
+        "n20": n20,
+        "nrows": len(df_plot),
+        "ultima_fecha": fecha_ultima,
+        "parcial": es_mes_parcial(df_plot, year, month),
+    }
 
 
 # ============================================================
-# 4) CREAR HTML
+# HTML
 # ============================================================
-def generar_html(n15, n20):
-    fecha = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    nombre_png = PNG_OUT.name
+def generar_html(resumenes):
+    fecha_web = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    cards = []
+    for r in resumenes:
+        parcial_txt = "parcial" if r["parcial"] else "completo"
+        cards.append(f"""
+        <section class="card">
+          <h2>{r["month_name"].capitalize()} {r["year"]}</h2>
+          <p class="meta">
+            <strong>Estado:</strong> {parcial_txt} &nbsp;|&nbsp;
+            <strong>Último dato:</strong> {r["ultima_fecha"]} &nbsp;|&nbsp;
+            <strong>≥15 kt:</strong> {r["n15"]} días &nbsp;|&nbsp;
+            <strong>≥20 kt:</strong> {r["n20"]} días
+          </p>
+          <img src="{r["png_name"]}" alt="Viento {r["month_name"]} {r["year"]}">
+          <p><a href="{r["png_name"]}">Descargar PNG</a></p>
+        </section>
+        """)
 
     html = f"""<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <title>Viento Carriel Sur Marzo 2026</title>
+  <title>Viento Carriel Sur — mes actual y anterior</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {{
       font-family: Arial, sans-serif;
-      margin: 30px;
-      background: #f7f7f7;
+      margin: 28px;
+      background: #f5f5f5;
       color: #222;
     }}
-    .box {{
-      max-width: 1200px;
+    .wrap {{
+      max-width: 1500px;
       margin: auto;
+    }}
+    .top {{
       background: white;
-      padding: 24px;
-      border-radius: 12px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      margin-bottom: 18px;
+    }}
+    .card {{
+      background: white;
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      margin-bottom: 18px;
     }}
     img {{
-      max-width: 100%;
+      width: 100%;
       height: auto;
       border: 1px solid #ddd;
+      border-radius: 8px;
+    }}
+    .meta {{
+      color: #444;
+      margin-bottom: 14px;
+    }}
+    a {{
+      color: #0b57d0;
+      text-decoration: none;
+    }}
+    a:hover {{
+      text-decoration: underline;
     }}
   </style>
 </head>
 <body>
-  <div class="box">
-    <h1>Viento en Carriel Sur — Marzo 2026</h1>
-    <p><strong>Última actualización:</strong> {fecha}</p>
-    <p><strong>Días con ≥15 kt:</strong> {n15} &nbsp;&nbsp; <strong>Días con ≥20 kt:</strong> {n20}</p>
-    <img src="{nombre_png}" alt="Serie viento dirección">
-    <p><a href="{nombre_png}">Descargar PNG</a></p>
+  <div class="wrap">
+    <div class="top">
+      <h1>Viento en Carriel Sur</h1>
+      <p><strong>Actualización automática:</strong> {fecha_web}</p>
+      <p>Se muestran siempre dos meses: el mes actual y el mes anterior.</p>
+    </div>
+    {''.join(cards)}
   </div>
 </body>
 </html>
 """
-    HTML_OUT.write_text(html, encoding="utf-8")
-    print(f"HTML guardado en: {HTML_OUT}")
+    (SITE_DIR / "index.html").write_text(html, encoding="utf-8")
+    print(f"HTML guardado en: {SITE_DIR / 'index.html'}")
 
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
-    descargar_mes()
-    df = cargar_y_preparar()
-    n15, n20 = generar_figura(df)
-    generar_html(n15, n20)
+    targets = meses_objetivo()
+    print("Meses objetivo:", targets)
+
+    # Descarga en una sola sesión
+    descargar_meses(targets)
+
+    resumenes = []
+    for year, month in targets:
+        df = cargar_y_preparar(year, month)
+        resumen = generar_figura(df, year, month)
+        resumenes.append(resumen)
+
+    generar_html(resumenes)
     print("Proceso terminado OK.")
 
 
