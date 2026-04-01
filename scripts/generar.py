@@ -114,30 +114,35 @@ def descargar_mes():
         time.sleep(3)
 
         tabla = driver.find_element(By.XPATH, '//*[@id="excel"]/div/table')
-        filas = tabla.find_elements(By.XPATH, "./tbody/tr")
+        filas = tabla.find_elements(By.XPATH, ".//tbody/tr")
+
         # Forzar encabezados fijos
         encabezados = ["fecha", "hora", "direccion", "intensidad"]
 
         datos = []
         for fila in filas:
-        celdas = fila.find_elements(By.TAG_NAME, "td")
-        if len(celdas) >= 4:
-            fila_txt = [cel.text.strip() for cel in celdas[:4]]
+            celdas = fila.find_elements(By.TAG_NAME, "td")
+            if len(celdas) >= 4:
+                fila_txt = [cel.text.strip() for cel in celdas[:4]]
 
-            # Evitar una fila de encabezado incrustada dentro del tbody
-            fila_norm = [x.strip().lower() for x in fila_txt]
-        if fila_norm == ["fecha", "hora", "direccion", "intensidad"]:
-            continue
+                # Saltar filas vacías
+                if not any(fila_txt):
+                    continue
 
-        datos.append(fila_txt)
+                # Evitar encabezado duplicado dentro del tbody
+                fila_norm = [x.strip().lower() for x in fila_txt]
+                if fila_norm == ["fecha", "hora", "direccion", "intensidad"]:
+                    continue
 
-if not datos:
-    raise RuntimeError("No se descargaron datos para el mes solicitado.")
+                datos.append(fila_txt)
 
-with open(CSV_MENSUAL, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow(encabezados)
-    writer.writerows(datos)
+        if not datos:
+            raise RuntimeError("No se descargaron datos para el mes solicitado.")
+
+        with open(CSV_MENSUAL, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(encabezados)
+            writer.writerows(datos)
 
         print(f"CSV mensual guardado en: {CSV_MENSUAL}")
         print(f"Filas descargadas: {len(datos)}")
@@ -154,7 +159,27 @@ def cargar_y_preparar():
     if not CSV_MENSUAL.exists():
         raise FileNotFoundError(f"No existe el archivo esperado: {CSV_MENSUAL}")
 
+    # Lectura normal
     df = pd.read_csv(CSV_MENSUAL)
+
+    # Fallback por si alguna vez el CSV quedó sin encabezado correcto
+    cols_lower = [str(c).strip().lower() for c in df.columns]
+    expected = ["fecha", "hora", "direccion", "intensidad"]
+
+    if cols_lower != expected:
+        if len(df.columns) == 4:
+            df = pd.read_csv(
+                CSV_MENSUAL,
+                header=None,
+                names=expected,
+                skiprows=1
+            )
+        else:
+            raise ValueError(
+                f"El CSV no tiene las columnas esperadas {expected}. "
+                f"Columnas encontradas: {list(df.columns)}"
+            )
+
     df.columns = [str(c).strip().lower() for c in df.columns]
 
     required = ["fecha", "hora", "direccion", "intensidad"]
@@ -171,6 +196,7 @@ def cargar_y_preparar():
     hora_txt = df["hora"].astype(str).str.strip()
     hora_dt = pd.to_timedelta(hora_txt, errors="coerce")
 
+    # Fallback por si la hora viene como decimal
     mask_bad = hora_dt.isna()
     if mask_bad.any():
         hora_num = pd.to_numeric(
@@ -194,9 +220,11 @@ def cargar_y_preparar():
     df = df.dropna(subset=["datetime", "wind_kt"])
     df = df.sort_values("datetime").set_index("datetime")
 
+    # Mantener el mismo filtro que tu script original
     df["wind_kt"] = df["wind_kt"].where(df["wind_kt"] <= 30.0, other=np.nan)
     df = df.dropna(subset=["wind_kt"])
 
+    # Filtrar por seguridad solo al mes objetivo
     df = df[(df.index.year == TARGET_YEAR) & (df.index.month == TARGET_MONTH)].copy()
 
     if df.empty:
@@ -211,10 +239,10 @@ def cargar_y_preparar():
 def to_month_ref(idx, month=TARGET_MONTH, year_ref=2000):
     idx = pd.DatetimeIndex(idx)
     return pd.to_datetime({
-        "year":   np.full(len(idx), year_ref, dtype=int),
-        "month":  np.full(len(idx), month, dtype=int),
-        "day":    idx.day.values,
-        "hour":   idx.hour.values,
+        "year": np.full(len(idx), year_ref, dtype=int),
+        "month": np.full(len(idx), month, dtype=int),
+        "day": idx.day.values,
+        "hour": idx.hour.values,
         "minute": idx.minute.values,
         "second": idx.second.values,
     })
@@ -235,8 +263,10 @@ def generar_figura(df_plot):
         gridspec_kw={"height_ratios": [1, 1], "hspace": 0.06}
     )
 
+    # Panel superior: intensidad
     ax1.plot(
-        t_ref, df_plot["wind_kt"],
+        t_ref,
+        df_plot["wind_kt"],
         color="tab:red",
         linewidth=1.5,
         label=str(TARGET_YEAR),
@@ -255,10 +285,14 @@ def generar_figura(df_plot):
         ts_max = gd["wind_kt"].idxmax()
         val_max = gd.loc[ts_max, "wind_kt"]
         ax1.scatter(
-            to_month_ref([ts_max]), [val_max],
-            marker="*", s=STAR20_SIZE,
-            facecolor=STAR20_FACE, edgecolor=STAR20_EDGE,
-            linewidth=1.0, zorder=5
+            to_month_ref([ts_max]),
+            [val_max],
+            marker="*",
+            s=STAR20_SIZE,
+            facecolor=STAR20_FACE,
+            edgecolor=STAR20_EDGE,
+            linewidth=1.0,
+            zorder=5
         )
 
     for d in daily_max[(daily_max >= THR15) & (daily_max < THR20)].index:
@@ -268,10 +302,14 @@ def generar_figura(df_plot):
         ts_max = gd["wind_kt"].idxmax()
         val_max = gd.loc[ts_max, "wind_kt"]
         ax1.scatter(
-            to_month_ref([ts_max]), [val_max],
-            marker="*", s=STAR15_SIZE,
-            facecolor=STAR15_FACE, edgecolor=STAR15_EDGE,
-            linewidth=1.0, zorder=4
+            to_month_ref([ts_max]),
+            [val_max],
+            marker="*",
+            s=STAR15_SIZE,
+            facecolor=STAR15_FACE,
+            edgecolor=STAR15_EDGE,
+            linewidth=1.0,
+            zorder=4
         )
 
     n20 = int((daily_max >= THR20).sum())
@@ -284,18 +322,27 @@ def generar_figura(df_plot):
         fontsize=9,
         verticalalignment="top",
         color="tab:red",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="tab:red", alpha=0.85)
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor="tab:red",
+            alpha=0.85
+        )
     )
 
     h_line = plt.Line2D([0], [0], color="tab:red", linewidth=1.5, label=str(TARGET_YEAR))
     h_thr15 = plt.Line2D([0], [0], color="silver", linestyle="--", linewidth=1.2, label="15 kt")
     h_thr20 = plt.Line2D([0], [0], color="gold", linestyle="--", linewidth=1.2, label="20 kt")
-    h15 = ax1.scatter([], [], marker="*", s=STAR15_SIZE,
-                      facecolor=STAR15_FACE, edgecolor=STAR15_EDGE,
-                      linewidth=1.0, label="≥15 kt")
-    h20 = ax1.scatter([], [], marker="*", s=STAR20_SIZE,
-                      facecolor=STAR20_FACE, edgecolor=STAR20_EDGE,
-                      linewidth=1.0, label="≥20 kt")
+    h15 = ax1.scatter(
+        [], [], marker="*", s=STAR15_SIZE,
+        facecolor=STAR15_FACE, edgecolor=STAR15_EDGE,
+        linewidth=1.0, label="≥15 kt"
+    )
+    h20 = ax1.scatter(
+        [], [], marker="*", s=STAR20_SIZE,
+        facecolor=STAR20_FACE, edgecolor=STAR20_EDGE,
+        linewidth=1.0, label="≥20 kt"
+    )
 
     ax1.legend(handles=[h_line, h_thr15, h_thr20, h15, h20],
                frameon=False, loc="upper right")
@@ -307,11 +354,16 @@ def generar_figura(df_plot):
     ax1.set_xlim(xmin, xmax)
     ax1.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 6, 12, 18]))
 
+    # Panel inferior: dirección
     sc = ax2.scatter(
-        t_ref, dir_plot,
-        c=dir_plot, cmap="hsv",
-        vmin=0, vmax=360,
-        s=18, zorder=3
+        t_ref,
+        dir_plot,
+        c=dir_plot,
+        cmap="hsv",
+        vmin=0,
+        vmax=360,
+        s=18,
+        zorder=3
     )
 
     for deg in [0, 90, 180, 270, 360]:
