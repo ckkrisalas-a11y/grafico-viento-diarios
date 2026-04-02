@@ -447,9 +447,7 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
     dir_plot = df_plot["wind_dir"].copy()
     dir_plot[df_plot["wind_kt"] == 0] = np.nan
 
-    # --------------------------------------------------------
     # Persistencia de viento sur/norte favorable
-    # --------------------------------------------------------
     step_hours = infer_step_hours(df_plot.index)
 
     mask_sur = mask_viento_sur_favorable(
@@ -470,9 +468,7 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
         mask_norte, df_plot.index, step_hours, min_event_hours=MIN_EVENT_HOURS
     )
 
-    # --------------------------------------------------------
-    # Figura
-    # --------------------------------------------------------
+    # Figura limpia, sin leyendas internas
     fig, (ax1, ax2) = plt.subplots(
         2, 1,
         figsize=(20, 8),
@@ -542,44 +538,6 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
     n15 = int(((daily_max >= THR15) & (daily_max < THR20)).sum())
     n10 = int(((daily_max >= THR10) & (daily_max < THR15)).sum())
 
-    texto_stats = (
-        f"★ ≥20 kt: {n20} días\n"
-        f"☆ ≥15 kt: {n15} días\n"
-        f"· ≥10 kt: {n10} días\n\n"
-        f"Viento Sur favorable a surgencia ({int(SUR_DIR_MIN)}°–{int(SUR_DIR_MAX)}°, ≥{int(THR10)} kt): "
-        f"{resumen_sur['n_eventos']} eventos | {format_horas(resumen_sur['total_h'])} | "
-        f"máx {format_horas(resumen_sur['max_h'])} | {estado_evento_actual(resumen_sur['current_h'])}\n"
-        f"Viento Norte favorable a convergencia ({int(NORTH_DIR_MIN_1)}°–360° y 0°–{int(NORTH_DIR_MAX_2)}°, ≥{int(THR10)} kt): "
-        f"{resumen_norte['n_eventos']} eventos | {format_horas(resumen_norte['total_h'])} | "
-        f"máx {format_horas(resumen_norte['max_h'])} | {estado_evento_actual(resumen_norte['current_h'])}"
-    )
-
-    ax1.text(
-        0.01, 0.97,
-        texto_stats,
-        transform=ax1.transAxes,
-        fontsize=8.6,
-        verticalalignment="top",
-        color="tab:red",
-        bbox=dict(
-            boxstyle="round,pad=0.35",
-            facecolor="white",
-            edgecolor="tab:red",
-            alpha=0.88
-        )
-    )
-
-    ax1.text(
-        0.99, 0.03,
-        "Sombreado azul: evento Sur favorable a surgencia | "
-        "Sombreado naranjo: evento Norte favorable a convergencia",
-        transform=ax1.transAxes,
-        ha="right", va="bottom",
-        fontsize=8,
-        color="0.25",
-        bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="0.8", alpha=0.75)
-    )
-
     # Eje derecho: m/s
     ymax_kt = max(1.0, ax1.get_ylim()[1])
     ax1_r = ax1.twinx()
@@ -590,22 +548,7 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
     )
     ax1_r.yaxis.set_minor_locator(ticker.NullLocator())
 
-    # Leyenda superior simplificada
-    h_line = plt.Line2D([0], [0], color="tab:red", lw=1.5, label="Intensidad")
-    h_thr10 = plt.Line2D([0], [0], color="steelblue", lw=1.0, ls=(0, (5, 4)), label="10 kt")
-    h_thr15 = plt.Line2D([0], [0], color="gray", lw=1.2, ls="--", label="15 kt")
-    h_thr20 = plt.Line2D([0], [0], color="#DAA520", lw=1.4, ls="--", label="20 kt")
-    h15 = ax1.scatter([], [], marker="*", s=STAR15_SIZE,
-                      facecolor=STAR15_FACE, edgecolor=STAR15_EDGE, lw=1.0, label="máx diario ≥15 kt")
-    h20 = ax1.scatter([], [], marker="*", s=STAR20_SIZE,
-                      facecolor=STAR20_FACE, edgecolor=STAR20_EDGE, lw=1.0, label="máx diario ≥20 kt")
-
-    ax1.legend(
-        handles=[h_line, h_thr10, h_thr15, h_thr20, h15, h20],
-        frameon=False, loc="upper right", fontsize=8
-    )
-
-    # Momento actual si cae dentro del mes mostrado
+    # Momento actual si cae dentro del mes mostrado (sin texto)
     now_local = pd.Timestamp.now(tz=TZ_LOCAL)
     if (now_local.year == year) and (now_local.month == month):
         t_now = pd.Timestamp(
@@ -614,10 +557,6 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
         )
         ax1.axvline(t_now, color="black", linestyle="--", linewidth=1.0, alpha=0.8, zorder=6)
         ax2.axvline(t_now, color="black", linestyle="--", linewidth=1.0, alpha=0.8, zorder=6)
-        ax1.text(
-            t_now, ax1.get_ylim()[1] * 0.98, "Ahora",
-            rotation=90, va="top", ha="right", fontsize=8, color="black"
-        )
 
     parcial_txt = " (parcial)" if es_mes_parcial(df_plot, year, month) else ""
     ax1.set_title(
@@ -651,17 +590,6 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
     ax2.set_ylim(-10, 370)
     ax2.grid(True, which="major", alpha=0.2)
     ax2.grid(True, which="minor", alpha=0.1, linestyle=":")
-
-    # Nota angular en vez de colorbar derecha
-    ax2.text(
-        0.01, 0.02,
-        f"Sector Sur favorable: {int(SUR_DIR_MIN)}°–{int(SUR_DIR_MAX)}°  |  "
-        f"Sector Norte favorable: {int(NORTH_DIR_MIN_1)}°–360° y 0°–{int(NORTH_DIR_MAX_2)}°",
-        transform=ax2.transAxes,
-        ha="left", va="bottom",
-        fontsize=8.3, color="0.25",
-        bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="0.8", alpha=0.78)
-    )
 
     # Formato eje X
     ax1.xaxis.set_major_locator(mdates.DayLocator(interval=1))
@@ -720,6 +648,7 @@ def generar_html(resumenes):
         cards.append(f"""
         <section class="card">
           <h2>{r["month_name"].capitalize()} {r["year"]}</h2>
+
           <p class="meta">
             <strong>Estado:</strong> {parcial_txt} &nbsp;|&nbsp;
             <strong>Último dato:</strong> {r["ultima_fecha"]} &nbsp;|&nbsp;
@@ -729,10 +658,10 @@ def generar_html(resumenes):
           </p>
 
           <p class="meta">
-            <strong>Viento Sur favorable a surgencia:</strong>
+            <strong>Viento Sur favorable a surgencia (135°–225°, ≥10 kt):</strong>
             {r["sur_eventos"]} eventos | {r["sur_total_h"]} | máx {r["sur_max_h"]} | {r["sur_actual"]}
             <br>
-            <strong>Viento Norte favorable a convergencia:</strong>
+            <strong>Viento Norte favorable a convergencia (315°–360° y 0°–45°, ≥10 kt):</strong>
             {r["norte_eventos"]} eventos | {r["norte_total_h"]} | máx {r["norte_max_h"]} | {r["norte_actual"]}
           </p>
 
@@ -770,9 +699,19 @@ def generar_html(resumenes):
       <p><strong>Actualización automática:</strong> {fecha_web}</p>
       <p>Se muestran siempre dos meses: el mes actual y el mes anterior.</p>
       <p>
-        Criterios mostrados en la figura:
-        Viento Sur favorable a surgencia = 135°–225° y ≥{int(THR10)} kt;
-        Viento Norte favorable a convergencia = 315°–360° y 0°–45° y ≥{int(THR10)} kt.
+        Los gráficos se muestran limpios, sin leyendas internas.
+        La información de persistencia y criterios se resume aquí.
+      </p>
+      <p>
+        <strong>Criterios:</strong>
+        Viento Sur favorable a surgencia = 135°–225° y ≥10 kt;
+        Viento Norte favorable a convergencia = 315°–360° y 0°–45° y ≥10 kt.
+      </p>
+      <p>
+        <strong>Visual:</strong>
+        sombreado azul = evento Sur favorable a surgencia;
+        sombreado naranjo = evento Norte favorable a convergencia;
+        línea vertical negra punteada = momento actual cuando corresponde al mes mostrado.
       </p>
     </div>
     {''.join(cards)}
