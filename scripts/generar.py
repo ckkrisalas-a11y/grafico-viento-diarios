@@ -695,12 +695,10 @@ def generar_html(resumenes):
 <body>
   <div class="wrap">
     <div class="top">
-      <h1>Viento en Carriel Sur</h1>
-      <p><strong>Actualización automática:</strong> {fecha_web}</p>
-      <p>Se muestran siempre dos meses: el mes actual y el mes anterior.</p>
-      <p>
-        Los gráficos se muestran limpios, sin leyendas internas.
-        La información de persistencia y criterios se resume aquí.
+      <h1>Viento de Estación Meteorológica Carriel Sur</h1>
+      <p><strong>Actualización automática (cada 1 hr):</strong> {fecha_web}</p>
+      <p>Se muestra el mes actual y el mes anterior.</p>
+       La información de persistencia y criterios se resume aquí.
       </p>
       <p>
         <strong>Criterios:</strong>
@@ -711,7 +709,7 @@ def generar_html(resumenes):
         <strong>Visual:</strong>
         sombreado azul = evento Sur favorable a surgencia;
         sombreado naranjo = evento Norte favorable a convergencia;
-        línea vertical negra punteada = momento actual cuando corresponde al mes mostrado.
+        línea vertical negra punteada = momento actual.
       </p>
     </div>
     {''.join(cards)}
