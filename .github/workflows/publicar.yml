@@ -1,4 +1,4 @@
-name: generar-y-publicar #hola 
+name: generar-y-publicar
 
 on:
   schedule:
