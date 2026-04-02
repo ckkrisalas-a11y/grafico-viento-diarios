@@ -65,15 +65,16 @@ def nombre_mes_es(month: int) -> str:
 
 def meses_objetivo():
     """
-    Devuelve [(anio_mes_anterior), (anio_mes_actual)] usando hora de Chile.
+    Devuelve [(anio_mes_actual), (anio_mes_anterior)] usando hora de Chile.
+    Así el mes actual aparece primero en la web.
     """
     now_local = datetime.now(TZ_LOCAL)
     primero_actual = datetime(now_local.year, now_local.month, 1, tzinfo=TZ_LOCAL)
     ultimo_anterior = primero_actual - timedelta(days=1)
 
     return [
-        (ultimo_anterior.year, ultimo_anterior.month),
         (now_local.year, now_local.month),
+        (ultimo_anterior.year, ultimo_anterior.month),
     ]
 
 
@@ -259,8 +260,7 @@ def cargar_y_preparar(year: int, month: int) -> pd.DataFrame:
     if m.any():
         dt.loc[m] = pd.to_datetime(fh.loc[m], errors="coerce", dayfirst=True)
 
-    # IMPORTANTE:
-    # Interpretamos la hora descargada como UTC y luego la convertimos a Chile
+    # Interpretar como UTC y convertir a hora de Chile
     dt = pd.DatetimeIndex(dt)
     dt = dt.tz_localize("UTC").tz_convert("America/Santiago")
 
@@ -313,7 +313,6 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
     dir_plot = df_plot["wind_dir"].copy()
     dir_plot[df_plot["wind_kt"] == 0] = np.nan
 
-    # GridSpec para que ambos paneles tengan exactamente el mismo ancho
     fig = plt.figure(figsize=(20, 8))
     gs = fig.add_gridspec(
         2, 2,
@@ -440,7 +439,6 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
     cbar.set_ticks([0, 90, 180, 270, 360])
     cbar.set_ticklabels(["N", "E", "S", "O", "N"])
 
-    # Mismo eje x en ambos paneles
     ax1.xaxis.set_major_locator(mdates.DayLocator(interval=1))
     ax1.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 6, 12, 18]))
 
@@ -474,11 +472,18 @@ def generar_figura(df_plot: pd.DataFrame, year: int, month: int):
 # HTML
 # ============================================================
 def generar_html(resumenes):
-    fecha_web = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    ahora_local = datetime.now(TZ_LOCAL)
+    fecha_web = ahora_local.strftime("%Y-%m-%d %H:%M %Z")
+    version = ahora_local.strftime("%Y%m%d%H%M%S")
+
+    # Asegura que el mes actual quede primero
+    resumenes = sorted(resumenes, key=lambda r: (r["year"], r["month"]), reverse=True)
 
     cards = []
     for r in resumenes:
         parcial_txt = "parcial" if r["parcial"] else "completo"
+        img_url = f'{r["png_name"]}?v={version}'
+
         cards.append(f"""
         <section class="card">
           <h2>{r["month_name"].capitalize()} {r["year"]}</h2>
@@ -488,8 +493,8 @@ def generar_html(resumenes):
             <strong>≥15 kt:</strong> {r["n15"]} días &nbsp;|&nbsp;
             <strong>≥20 kt:</strong> {r["n20"]} días
           </p>
-          <img src="{r["png_name"]}" alt="Viento {r["month_name"]} {r["year"]}">
-          <p><a href="{r["png_name"]}">Descargar PNG</a></p>
+          <img src="{img_url}" alt="Viento {r["month_name"]} {r["year"]}">
+          <p><a href="{img_url}">Descargar PNG</a></p>
         </section>
         """)
 
@@ -499,6 +504,11 @@ def generar_html(resumenes):
   <meta charset="utf-8">
   <title>Viento Carriel Sur — mes actual y anterior</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
   <style>
     body {{
       font-family: Arial, sans-serif;
@@ -566,7 +576,6 @@ def main():
     targets = meses_objetivo()
     print("Meses objetivo:", targets)
 
-    # Descarga en una sola sesión
     descargar_meses(targets)
 
     resumenes = []
